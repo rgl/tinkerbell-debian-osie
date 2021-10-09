@@ -236,6 +236,115 @@ ExecStart=
 ExecStart=/usr/sbin/dockerd
 EOF
 
+# create the promtail service that will send the journal log messages to loki.
+# NB the arm64 build does not yet support reading from journald; so the logs
+#    will not be sent to loki.
+#    see https://github.com/grafana/loki/issues/1459
+promtail_version='2.3.0'
+promtail_zip_path="$CACHE_PATH/promtail-$promtail_version-$LB_BUILD_ARCH.zip"
+if [ ! -f "$promtail_zip_path" ]; then
+    wget -qO "$promtail_zip_path" \
+        "https://github.com/grafana/loki/releases/download/v$promtail_version/promtail-linux-$LB_BUILD_ARCH.zip"
+fi
+install -d config/includes.chroot/usr/local/bin
+unzip -d config/includes.chroot/usr/local/bin "$promtail_zip_path"
+mv config/includes.chroot/usr/local/bin/promtail{-linux-$LB_BUILD_ARCH,}
+install -m 755 /dev/null config/includes.chroot/usr/local/bin/promtail.sh
+cat >config/includes.chroot/usr/local/bin/promtail.sh <<'EOF'
+#!/bin/bash
+set -eu -o pipefail -o errtrace
+
+function err_trap {
+    local err=$?
+    set +e
+    echo "ERROR: Trap exit code $err at:" >&2
+    echo "ERROR:   ${BASH_SOURCE[1]}:${BASH_LINENO[0]} ${BASH_COMMAND}" >&2
+    if [ ${#FUNCNAME[@]} -gt 2 ]; then
+        for ((i=1;i<${#FUNCNAME[@]}-1;i++)); do
+            echo "ERROR:   ${BASH_SOURCE[$i+1]}:${BASH_LINENO[$i]} ${FUNCNAME[$i]}(...)" >&2
+        done
+    fi
+    exit $err
+}
+
+trap err_trap ERR
+
+function get-param {
+    cat /proc/cmdline | tr ' ' '\n' | grep "^$1=" | sed -E 's,.+=(.*),\1,g'
+}
+
+# get the required parameters.
+# TODO find a secure way to bootstrap these values and secrets.
+syslog_host="$(get-param syslog_host)"
+worker_id="$(get-param worker_id)"
+# TODO use https.
+loki_url="http://$syslog_host:3100/loki/api/v1/push"
+
+# configure promtail.
+# see https://grafana.com/docs/loki/latest/clients/promtail/configuration/#example-journal-config
+# see https://grafana.com/docs/loki/latest/clients/promtail/scraping/#journal-scraping-linux-only
+install -d -m 700 /var/run/promtail
+install -m 600 /dev/null /var/run/promtail/config.yaml
+cat >/var/run/promtail/config.yaml <<CONFIG_EOF
+positions:
+  filename: /var/run/promtail/positions.yaml
+
+clients:
+  - url: '$loki_url'
+
+scrape_configs:
+  - job_name: journal
+    journal:
+      max_age: 12h
+      json: false
+      labels:
+        job: systemd-journal
+        host: '$(hostname)'
+        worker_id: '$worker_id'
+    # see https://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html#Trusted%20Journal%20Fields
+    # see https://grafana.com/docs/loki/latest/clients/promtail/scraping/#journal-scraping-linux-only
+    # NB use journalctl -n 1 -o json to see an actual journal log message (including metadata).
+    # NB use journalctl -n 1 -o json CONTAINER_NAME=date-ticker to see a container log message.
+    relabel_configs:
+      - source_labels: [__journal__systemd_unit]
+        target_label: source
+      - source_labels: [__journal_container_name]
+        target_label: _container_name
+      - source_labels: [__journal_workflow_id]
+        target_label: workflow_id
+    pipeline_stages:
+      - match:
+          selector: '{source="docker.service"}'
+          stages:
+            - template:
+                source: job
+                template: container
+            - labels:
+                job:
+                source: _container_name
+      - labeldrop:
+          - _container_name
+CONFIG_EOF
+
+# execute promtail.
+exec /usr/local/bin/promtail -config.file=/var/run/promtail/config.yaml
+EOF
+install -m 644 /dev/null config/includes.chroot/etc/systemd/system/promtail.service
+cat >config/includes.chroot/etc/systemd/system/promtail.service <<'EOF'
+[Unit]
+Description=Promtail
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/promtail.sh
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # create the systemd service that starts the tink-worker container.
 install -d config/includes.chroot/usr/local/bin
 install -m 755 /dev/null config/includes.chroot/usr/local/bin/tink-worker-start.sh
@@ -428,6 +537,7 @@ EOS
 
 chown -R osie:osie .
 
+systemctl enable promtail
 systemctl enable tink-worker
 systemctl enable tink-reboot
 EOF
