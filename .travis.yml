@@ -1,0 +1,13 @@
+# see https://docs.travis-ci.com/user/reference/overview/
+# see https://docs.travis-ci.com/user/languages/minimal-and-generic/
+# see https://config.travis-ci.com/
+virt: vm
+group: edge
+arch: arm64-graviton2
+os: linux
+dist: focal
+language: shell
+script:
+  - sudo bash build-in-lxd.sh install-builder
+  - sudo bash build-in-lxd.sh start-builder
+  - sudo bash build-in-lxd.sh build
