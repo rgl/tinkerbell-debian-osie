@@ -1,0 +1,79 @@
+name: build
+on: [push]
+jobs:
+  amd64:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install builder
+        shell: sudo bash {0}
+        run: |
+          set -euxo pipefail
+          #echo "IP address: $(wget -qO- https://api.ipify.org)"
+          lxd --version
+          lxd init --auto
+      - name: Start builder
+        shell: sudo bash {0}
+        run: |
+          set -euxo pipefail
+          lxc init --quiet images:debian/11 builder
+          lxc config device add builder mnt disk source=$PWD path=/mnt
+          lxc start builder
+          lxc exec builder -- bash -c 'while [ "$(systemctl is-system-running)" != "running" ]; do sleep 1; done'
+          lxc list
+      - name: Build
+        shell: sudo bash {0}
+        run: |
+          set -euxo pipefail
+          lxc exec builder -- bash -c 'echo quiet=on >~/.wgetrc'
+          lxc exec builder \
+            --env DEBIAN_MIRROR=http://ftp.us.debian.org/debian/ \
+            -- bash /mnt/build.sh
+          lxc file pull builder/root/osie-amd64/live-image-amd64.hybrid.iso tinkerbell-debian-osie-amd64.iso
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: amd64
+          path: |
+            *.iso
+  arm64:
+    # NB this uses a self-host runner managed by https://github.com/rgl/lxd-github-actions-runner
+    runs-on:
+      - self-hosted
+      - debian-11
+      - arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Build
+        shell: sudo bash {0}
+        run: |
+          set -euxo pipefail
+          echo quiet=on >~/.wgetrc
+          export DEBIAN_MIRROR=http://ftp.nl.debian.org/debian/
+          export LB_BUILD_ARCH=arm64
+          bash build.sh
+          mv osie-$LB_BUILD_ARCH/live-image-$LB_BUILD_ARCH.hybrid.iso tinkerbell-debian-osie-$LB_BUILD_ARCH.iso
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: arm64
+          path: |
+            *.iso
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-20.04
+    needs:
+      - amd64
+      - arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+      - name: Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: 'amd64/*.iso,arm64/*.iso'
+          token: ${{ secrets.GITHUB_TOKEN }}

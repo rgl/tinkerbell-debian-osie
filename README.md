@@ -1,5 +1,7 @@
 # About
 
+[![build](https://github.com/rgl/tinkerbell-debian-osie/actions/workflows/build.yml/badge.svg)](https://github.com/rgl/tinkerbell-debian-osie/actions/workflows/build.yml)
+
 This creates a Debian based [Tinkerbell](https://tinkerbell.org/) Operating System Installation Environment (OSIE).
 
 **this is a WIP and this repository will be rebased**

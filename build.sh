@@ -7,15 +7,30 @@ set -euxo pipefail
 #   arm64
 LB_BUILD_ARCH="${LB_BUILD_ARCH:=amd64}"
 
+# the debian mirror to use.
+DEBIAN_MIRROR_URL="${DEBIAN_MIRROR:=http://ftp.pt.debian.org/debian/}"
+
+# where to cache files.
+if [ -d /vagrant ]; then
+    CACHE_PATH="${CACHE_PATH:=/vagrant/tmp}"
+else
+    CACHE_PATH="${CACHE_PATH:=/tmp}"
+fi
+if [ ! -d "$CACHE_PATH" ]; then
+    install -d "$CACHE_PATH"
+fi
+
 
 #
 # install dependencies.
 
-if [ "$LB_BUILD_ARCH" == 'arm64' ]; then
+if [ "$LB_BUILD_ARCH" == 'arm64' ] && [ "$(uname -m)" != "aarch64" ]; then
     apt-get install -y qemu-user-static
 fi
 apt-get install -y libcdio-utils
 apt-get install -y live-build
+apt-get install -y unzip
+apt-get install -y fdisk
 
 
 #
@@ -39,7 +54,7 @@ lb_config='\
     --iso-application "Debian OSIE" \
     --iso-publisher https://github.com/rgl/tinkerbell-debian-osie \
     '
-if [ "$LB_BUILD_ARCH" == 'arm64' ]; then
+if [ "$LB_BUILD_ARCH" == 'arm64' ] && [ "$(uname -m)" != "aarch64" ]; then
 lb_config="$lb_config \\
     --bootloader grub-efi \\
     --bootstrap-qemu-arch arm64 \\
@@ -55,8 +70,8 @@ lb config noauto \\
     --distribution bullseye \\
     --architectures $LB_BUILD_ARCH \\
     --bootappend-live 'boot=live components username=osie noautologin' \\
-    --mirror-bootstrap http://ftp.pt.debian.org/debian/ \\
-    --mirror-binary http://ftp.pt.debian.org/debian/ \\
+    --mirror-bootstrap $DEBIAN_MIRROR_URL \\
+    --mirror-binary $DEBIAN_MIRROR_URL \\
     --apt-indices false \\
     --memtest none \\
     "\${@}"
@@ -466,7 +481,9 @@ fdisk -l live-image-$LB_BUILD_ARCH.hybrid.iso
 iso-info live-image-$LB_BUILD_ARCH.hybrid.iso --no-header
 
 # copy it on the host fs (it will be used by the target VM).
-cp -f live-image-$LB_BUILD_ARCH.hybrid.iso /vagrant/tinkerbell-debian-osie-$LB_BUILD_ARCH.iso
+if [ -d /vagrant ]; then
+    cp -f live-image-$LB_BUILD_ARCH.hybrid.iso /vagrant/tinkerbell-debian-osie-$LB_BUILD_ARCH.iso
+fi
 
 # clean it.
 #lb clean
