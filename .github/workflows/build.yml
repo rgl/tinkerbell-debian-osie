@@ -7,30 +7,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: Install builder
-        shell: sudo bash {0}
-        run: |
-          set -euxo pipefail
-          #echo "IP address: $(wget -qO- https://api.ipify.org)"
-          lxd --version
-          lxd init --auto
+        run: sudo bash build-in-lxd.sh install-builder
       - name: Start builder
-        shell: sudo bash {0}
-        run: |
-          set -euxo pipefail
-          lxc init --quiet images:debian/11 builder
-          lxc config device add builder mnt disk source=$PWD path=/mnt
-          lxc start builder
-          lxc exec builder -- bash -c 'while [ "$(systemctl is-system-running)" != "running" ]; do sleep 1; done'
-          lxc list
+        run: sudo bash build-in-lxd.sh start-builder
       - name: Build
-        shell: sudo bash {0}
-        run: |
-          set -euxo pipefail
-          lxc exec builder -- bash -c 'echo quiet=on >~/.wgetrc'
-          lxc exec builder \
-            --env DEBIAN_MIRROR=http://ftp.us.debian.org/debian/ \
-            -- bash /mnt/build.sh
-          lxc file pull builder/root/osie-amd64/live-image-amd64.hybrid.iso tinkerbell-debian-osie-amd64.iso
+        run: sudo bash build-in-lxd.sh build
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
